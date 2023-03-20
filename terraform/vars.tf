@@ -1,10 +1,10 @@
 variable "resource_group_name" {
-    default = "rg-casopractico2"
+    default = "rg"
     description = "RG name in Azure"
 }
 
 variable "acr_name" {
-    default = "acrcasopractico2"
+    default = "osuracacrcp2"
     description = "ACR name in Azure"
 }
 

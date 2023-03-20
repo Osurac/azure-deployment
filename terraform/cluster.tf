@@ -1,5 +1,4 @@
 ##############CLUSTER#################
-
 # Crea un clúster de AKS
 resource "azurerm_kubernetes_cluster" "aks" {
   name                = "my-aks-cluster"
@@ -7,28 +6,38 @@ resource "azurerm_kubernetes_cluster" "aks" {
   resource_group_name = azurerm_resource_group.rg.name
   dns_prefix          = "myakscluster"
 
-  # Versión de Kubernetes
-  kubernetes_version = "1.21.4"
-
-  # Configuración del pool de nodos
-  node_pool {
-    name            = "default"
-    vm_size         = "Standard_DS2_v2"
-    orchestrator_version = azurerm_kubernetes_cluster.aks.kubernetes_version
-    availability_zones = ["1", "2", "3"]
-    node_count      = 3
+  default_node_pool {
+    name       = "default"
+    node_count = 1
+    vm_size    = "Standard_D2_v2"
   }
 
-  # Configuración del servicio de red de Kubernetes
-  network_profile {
-    network_plugin = "azure"
-    dns_service_ip = "10.2.0.10"
-    service_cidr   = "10.2.0.0/24"
-    pod_cidr       = "10.244.0.0/16"
+  identity {
+    type = "SystemAssigned"
   }
+
+  tags = {
+    Environment = "Production"
+  }
+
+  depends_on = [azurerm_container_registry.acr]
+
+}
+
+output "client_certificate" {
+  value     = azurerm_kubernetes_cluster.aks.kube_config.0.client_certificate
+  sensitive = true
 }
 
 # Exporta las credenciales del clúster para que puedan ser usadas por kubectl
 output "kube_config" {
   value = azurerm_kubernetes_cluster.aks.kube_config_raw
+sensitive = true
+}
+
+resource "azurerm_role_assignment" "ara" {
+  principal_id                     = azurerm_kubernetes_cluster.aks.kubelet_identity[0].object_id
+  role_definition_name             = "AcrPull"
+  scope                            = azurerm_container_registry.acr.id
+  skip_service_principal_aad_check = true
 }

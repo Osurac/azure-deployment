@@ -1,0 +1,180 @@
+- name: Desplegar imagen desde Azure Container Registry en una VM de Azure
+  hosts: vm1
+  become: true
+
+  vars:
+    image_name: osuracacrcp2.azurecr.io/nginx:casopractico2
+    image_registry: osuracacrcp2.azurecr.io
+    pwd_registry: bpZHUaPpxfyOnQhzgqsXnhCYgzLcMRL8UbyLOGA0e/+ACRD6YBvk
+    acr_user: osuracacrcp2
+    ansible_ssh_private_key_file: "~/.ssh/id_rsa"
+    ansible_user: azureuser
+    nginx_cert_dir: "/etc/nginx/certs"
+    container_name: "nginx_container"
+    htpasswd_user: "osurac"
+    htpasswd_pass: "flipendo"
+    htpasswd_file: "/etc/nginx/.htpasswd"
+    port: 80
+    ssl_port: 443
+    env_dict:
+      VIRTUAL_PORT: "{{ port }}"
+      VIRTUAL_PROTO: http
+      HTTPS_METHOD: noredirect
+      HTTPS_PORT: "{{ ssl_port }}"
+      HTPASSWD_PATH: /etc/nginx/.htpasswd
+      HTPASSWD_USER: "{{ htpasswd_user }}"
+      HTPASSWD_PASS: "{{ htpasswd_pass }}"
+    nginx_conf: |
+    
+      user  nginx;
+      worker_processes  auto;
+
+      error_log  /var/log/nginx/error.log notice;
+      pid        /var/run/nginx.pid;
+
+
+      events {
+          worker_connections  1024;
+      }
+
+
+      http {
+          include       /etc/nginx/mime.types;
+          default_type  application/octet-stream;
+
+          log_format  main  '$remote_addr - $remote_user [$time_local] "$request" '
+                            '$status $body_bytes_sent "$http_referer" '
+                            '"$http_user_agent" "$http_x_forwarded_for"';
+
+          access_log  /var/log/nginx/access.log  main;
+
+          sendfile        on;
+          #tcp_nopush     on;
+
+          keepalive_timeout  65;
+
+          auth_basic "Ingrese sus credenciales para acceder al sitio web";
+          auth_basic_user_file /etc/nginx/.htpasswd;
+
+          # Habilitar HTTPS
+          # Configuración del certificado
+          ssl_certificate /etc/nginx/certs/cert.pem;
+          ssl_certificate_key /etc/nginx/certs/key.pem;
+
+          # Configuración de la sesión
+          ssl_session_cache shared:SSL:1m;
+          ssl_session_timeout  10m;
+
+          # Configuración de la seguridad
+          ssl_protocols TLSv1 TLSv1.1 TLSv1.2;
+          ssl_prefer_server_ciphers on;
+          ssl_ciphers ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-AES256-GCM-SHA384:DHE-RSA-AES128-GCM-SHA256:DHE-DSS-AES128-GCM-SHA256:kEDH+AESGCM:ECDHE-RSA-AES128-SHA256:ECDHE-ECDSA-AES128-SHA256:ECDHE-RSA-AES128-SHA:ECDHE-ECDSA-AES128-SHA:ECDHE-RSA-AES256-SHA384:ECDHE-ECDSA-AES256-SHA384:ECDHE-RSA-AES256-SHA:ECDHE-ECDSA-AES256-SHA:DHE-RSA-AES128-SHA256:DHE-RSA-AES128-SHA:DHE-DSS-AES128-SHA256:DHE-RSA-AES256-SHA256:DHE-DSS-AES256-SHA:DHE-RSA-AES256-SHA:AES128-GCM-SHA256:AES256-GCM-SHA384:AES128-SHA256:AES256-SHA256:AES128-SHA:AES256-SHA:AES:CAMELLIA:DES-CBC3-SHA:!aNULL:!eNULL:!EXPORT:!DES:!RC4:!MD5:!PSK:!aECDH:!EDH-DSS-DES-CBC3-SHA:!EDH-RSA-DES-CBC3-SHA:!KRB5-DES-CBC3-SHA;
+
+          #gzip  on;
+
+          server {
+              listen 80;
+              listen [::]:80;
+
+              server_name 4.234.118.147;
+
+              return 301 https://$host$request_uri;
+          }
+
+          server {
+              listen       443 ssl;
+              listen       [::]:443 ssl;
+              server_name  4.234.118.147;
+
+              # Configuración de la ubicación del archivo
+              location / {
+                  root   /usr/share/nginx/html;
+                  index  index.html index.htm;
+              }
+          }
+
+
+          include /etc/nginx/conf.d/*.conf;
+      }
+    
+  tasks:
+
+    - name: Login to default registry and create ${XDG_RUNTIME_DIR}/containers/auth.json
+      containers.podman.podman_login:
+        username: "{{ acr_user }}"
+        password: "{{ pwd_registry }}"
+        registry: "{{ image_registry }}"
+    
+    - name: Pull an image
+      containers.podman.podman_image:
+        name: "{{ image_name }}"
+
+    - name: Crear directorio de certificados de Nginx
+      file:
+        path: /etc/nginx/certs/
+        state: directory
+        mode: '0700'
+
+    - name: Copiar archivo de configuración de Nginx
+      copy:
+        content: "{{ nginx_conf }}"
+        dest: /etc/nginx/nginx.conf
+        mode: '0600'
+
+    - name: Crear clave privada
+      openssl_privatekey:
+        path: "{{ nginx_cert_dir }}/key.pem"
+        size: 2048
+        type: RSA
+        mode: "0600"
+
+    - name: Crear certificado x.509 autofirmado
+      openssl_certificate:
+        provider: selfsigned
+        path: "{{ nginx_cert_dir }}/cert.pem"
+        privatekey_path: "{{ nginx_cert_dir }}/key.pem"
+        mode: "0600"
+
+    - name: Crear archivo de autenticación básica para el servicio web
+      become: true
+      htpasswd:
+        path: "{{ nginx_cert_dir }}/.htpasswd"
+        name: "{{ htpasswd_user }}"
+        password: "{{ htpasswd_pass }}"
+    
+    - name: Copiar archivo de configuración de Nginx
+      copy:
+        content: "{{ nginx_conf }}"
+        dest: /etc/nginx/nginx.conf
+        mode: '0600'
+    
+    - name: Crear contenedor Nginx con Podman
+      become: true
+      containers.podman.podman_container:
+        name: "{{ container_name }}"
+        image: "{{ image_name }}"
+        state: started
+        interactive: no
+        tty: no
+        ports:
+          - "{{ port }}:{{ port }}"
+          - "{{ ssl_port }}:{{ ssl_port }}"
+        volume:
+          - "{{ nginx_cert_dir }}:/etc/nginx/certs"
+          - "{{ nginx_cert_dir }}/.htpasswd:/etc/nginx/.htpasswd"
+          - "/etc/nginx/nginx.conf:/etc/nginx/nginx.conf"
+        env: "{{ env_dict }}"
+        
+    - name: Abrir puertos en el firewall
+      become: true
+      ufw:
+        rule: allow
+        port: "{{ port }}"
+        proto: tcp
+
+    - name: Abrir puertos SSL en el firewall
+      become: true
+      ufw:
+        rule: allow
+        port: "{{ ssl_port }}"
+        proto: tcp

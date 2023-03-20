@@ -1,0 +1,131 @@
+- name: Despliegue de imagen de ACR en AKS
+  hosts: localhost
+  
+  vars:
+    ansible_python_interpreter: /usr/bin/python3 # configurar la ruta correcta del intérprete de Python
+    resource_group: rg
+    aks_cluster: my-aks-cluster
+    acr_registry: osuracacrcp2.azurecr.io
+    image_name: mongo
+    image_tag: casopractico2
+    storage_class: azurefile-csi
+    volume_name: mongovolume
+    mount_path: ~/data/db
+    ingress_path: /mongo
+    external_name: my-app
+    port: 27017
+  tasks:
+
+    - name: Crear directorio de volumenes de mongo
+      file:
+        path: "{{ mount_path }}"
+        state: directory
+        mode: '0700'
+
+    - name: Crear espacio de nombres
+      kubernetes.core.k8s:
+        kubeconfig: ~/.kube/config
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: mongo-namespace # especifica el nombre que deseas para el espacio de nombres
+        validate_certs: no
+    
+    - name: Crear persistente volume claim
+      kubernetes.core.k8s:
+        kubeconfig: ~/.kube/config
+        state: present
+        definition:
+          apiVersion: v1
+          kind: PersistentVolumeClaim
+          metadata:
+            name: "{{ volume_name }}"
+            namespace: mongo-namespace # especifica el nombre de tu espacio de nombres
+          spec:
+            accessModes:
+              - ReadWriteOnce
+            resources:
+              requests:
+                storage: 5Gi
+            storageClassName: "{{ storage_class }}"
+        validate_certs: no
+
+    - name: Desplegar imagen en AKS
+      kubernetes.core.k8s:
+        kubeconfig: ~/.kube/config
+        state: present
+        definition:
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: "{{ image_name }}"
+            namespace: mongo-namespace # especifica el nombre de tu espacio de nombres
+          spec:
+            selector:
+              matchLabels:
+                app: "{{ image_name }}"
+            template:
+              metadata:
+                labels:
+                  app: "{{ image_name }}"
+              spec:
+                containers:
+                  - name: "{{ image_name }}"
+                    image: "{{ acr_registry }}/{{ image_name }}:{{ image_tag }}"
+                    volumeMounts:
+                      - name: "{{ volume_name }}"
+                        mountPath: "{{ mount_path }}"
+                    ports:
+                      - containerPort: "{{ port }}"
+                volumes:
+                    - name: "{{ volume_name }}"
+                      persistentVolumeClaim:
+                        claimName: "{{ volume_name }}"
+      
+    - name: Crear objeto Service
+      kubernetes.core.k8s:
+        kubeconfig: ~/.kube/config
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: "{{ image_name }}-svc"
+            namespace: mongo-namespace # especifica el nombre de tu espacio de nombres
+          spec:
+            selector:
+              app: "{{ image_name }}"
+            ports:
+              - name: "{{ image_name }}-port"
+                port: "{{ port }}"
+                targetPort: "{{ port }}"
+            type: LoadBalancer
+        validate_certs: no
+      
+    - name: Crear Ingress para AKS
+      kubernetes.core.k8s:
+        kubeconfig: ~/.kube/config
+        state: present
+        definition:
+          apiVersion: networking.k8s.io/v1
+          kind: Ingress
+          metadata:
+            name: "{{ image_name }}-ingress"
+            namespace: mongo-namespace
+            annotations:
+              service.beta.kubernetes.io/azure-load-balancer-internal: "true"
+              nginx.ingress.kubernetes.io/rewrite-target: /
+          spec:
+            rules:
+            - host: mongo
+              http:
+                paths:
+                - path: "{{ ingress_path }}"
+                  backend:
+                    service:
+                      name: "{{ image_name }}-svc"
+                      port:
+                        number: "{{ port }}"   
+                  pathType: Prefix
